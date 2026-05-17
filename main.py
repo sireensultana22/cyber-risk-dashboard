@@ -1,11 +1,15 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm.session import Session
 
 from models import DeviceData
 from scoring import calculate_risk
 from alerts import generate_alerts
-from database import reports
+from database import engine, SessionLocal
+from db_models import Base, RiskReport
 
+
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
@@ -33,71 +37,81 @@ def analyze_device(data: DeviceData):
 
     result = calculate_risk(data)
 
-    alerts = generate_alerts(result)
+    alerts = generate_alerts(result["risk_level"])
 
     final_report = {
-
-        "device_name":
-        data.device_name,
-
-        "risk_score":
-        result["risk_score"],
-
-        "risk_level":
-        result["risk_level"],
-
-        "issues_found":
-        result["issues_found"],
-
-        "recommendations":
-        result["recommendations"],
-
-        "alerts":
-        alerts
+        "device_name": data.device_name,
+        "risk_score": result["risk_score"],
+        "risk_level": result["risk_level"],
+        "issues_found": result["issues"],
+        "recommendations": result["recommendations"],
+        "alerts": alerts
     }
 
-    reports.append(final_report)
+    db = SessionLocal()
+
+    report = RiskReport(
+        device_name=data.device_name,
+        risk_score=result["risk_score"],
+        risk_level=result["risk_level"]
+    )
+
+    db.add(report)
+    db.commit()
+    db.close()
 
     return final_report
-
 
 @app.get("/reports")
 def get_reports():
 
-    return reports
+    db = SessionLocal()
+
+    reports = db.query(RiskReport).all()
+
+    result = []
+
+    for report in reports:
+        result.append({
+            "device_name": report.device_name,
+            "risk_score": report.risk_score,
+            "risk_level": report.risk_level
+        })
+
+    db.close()
+
+    return result
 
 
 @app.get("/dashboard-summary")
 def dashboard_summary():
 
+    db = SessionLocal()
+
+    reports = db.query(RiskReport).all()
+
     total_devices = len(reports)
 
     high_risk = sum(
         1 for report in reports
-        if report["risk_level"] == "HIGH"
+        if report.risk_level == "HIGH"
     )
 
     medium_risk = sum(
         1 for report in reports
-        if report["risk_level"] == "MEDIUM"
+        if report.risk_level == "MEDIUM"
     )
 
     low_risk = sum(
         1 for report in reports
-        if report["risk_level"] == "LOW"
+        if report.risk_level == "LOW"
     )
 
+    db.close()
+
     return {
-
-        "total_devices":
-        total_devices,
-
-        "high_risk_devices":
-        high_risk,
-
-        "medium_risk_devices":
-        medium_risk,
-
-        "low_risk_devices":
-        low_risk
+        "total_devices": total_devices,
+        "high_risk": high_risk,
+        "medium_risk": medium_risk,
+        "low_risk": low_risk
     }
